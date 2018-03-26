@@ -1,4 +1,3 @@
-
 import zmq
 import threading
 import queue
@@ -73,8 +72,7 @@ class MailQueueClient(object):
             if self._subscriber in socks and socks[self._subscriber] == zmq.POLLIN:
                 # Read envelope with address
                 log.debug("waiting on subscriber to receive message")
-                # [rcpttos,data] = self._subscriber.recv_multipart()
-                data = self._subscriber.recv()
+                [rcpttos,data] = self._subscriber.recv_multipart()
 
                 log.debug("received message: %s" % (data))
                 self.messages.put(data)

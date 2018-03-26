@@ -3,16 +3,12 @@
 import argparse
 import asyncio
 import logging
-import queue
 import zmq
+import zmq.asyncio
 
 from aiosmtpd.controller import Controller
 from aiosmtpd.handlers import AsyncMessage
 
-
-#logging.basicConfig(level=logging.DEBUG,
-#                    format='(%(threadName)-10s) %(message)s',
-#                    )
 
 log = logging.getLogger(__name__)
 
@@ -56,13 +52,9 @@ class ZeroMQHandler(AsyncMessage):
 
     async def handle_DATA(self, server, session, envelope):
 
-        tos = ",".join(envelope.rcpt_tos)\
-                 .encode(encoding='utf-8')
-
         log.debug('Receiving message from: {0}'.format(session.peer))
         log.debug('Message addressed from: {0}'.format(envelope.mail_from))
         log.debug('Message addressed to  : {0}'.format(envelope.rcpt_tos))
-        log.debug('Message addressed to  : {0}'.format(tos))
         log.debug('Message length        : {0}'.format(len(envelope.content)))
 
         return await super().handle_DATA(server, session, envelope)
@@ -74,12 +66,22 @@ class ZeroMQHandler(AsyncMessage):
 
         log.debug('message = {0}'.format(message.as_bytes()))
 
-        # tos = message['X-RcptTo']
-        # self._publisher.send_multipart([tos, data])
-        self._publisher.send(message.as_bytes())
+        # Use message enveloping pattern so we can filter messages
+        # on the client side. This approach has a flaw in that if
+        # the message was sent to multiple people, the tos variable
+        # will have multiple email addresses in it, any of which could
+        # show up at any index in the list. Client side filtering only
+        # matches from the beginning of the key. Most of the time,
+        # this probably won't be much of a problem because in my
+        # use cases, emails sent through the system will probably only
+        # be sent to one recipient.
+
+        tos = message['X-RcptTo'].encode()
+        msg_bytes = message.as_bytes()
+        await self._publisher.send_multipart([tos, msg_bytes])
 
         if self._debug_queue is not None:
-            self._debug_queue.put(message.as_bytes())
+            await self._debug_queue.put(msg_bytes)
 
 
 class MailQueueServer(object):
@@ -122,13 +124,13 @@ class MailQueueServer(object):
     def start(self):
 
         # Prepare our message queue context and publisher
-        self.context   = zmq.Context()
+        self.context   = zmq.asyncio.Context()
         self.publisher = self.context.socket(zmq.PUB)
         self.publisher.bind("tcp://{0}:{1}".format(self._queue_host,self._queue_port))
 
         # setup the debug queue
         if self.store_emails is True and self.queue is None:
-            self.queue = queue.Queue()
+            self.queue = asyncio.Queue()
 
         # Prepare the mail server handler and controller
         self.handler = ZeroMQHandler(self.publisher, self.queue)
@@ -159,7 +161,7 @@ class MailQueueServer(object):
 
         logging.debug('Entering context')
 
-        self.start_queue()
+        self.start()
 
         return self
 
@@ -168,7 +170,7 @@ class MailQueueServer(object):
 
         logging.debug('Exiting context')
 
-        self.stop_queue()
+        self.stop()
 
 
 async def amain(opts,loop):
@@ -179,8 +181,6 @@ async def amain(opts,loop):
                         opts.mail_port)
     s.start()
 
-
-# https://github.com/aio-libs/aiosmtpd/blob/8fef59bff1a1721fee49d1d8bd463e827f110a05/examples/server.py
 
 if __name__ == '__main__':
 
